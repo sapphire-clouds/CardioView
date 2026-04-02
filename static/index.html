@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CardioView — DICOM Viewer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* ─── TOKENS ─────────────────────────────────────────────── */
+    :root {
+      --accent:       #50cddd;
+      --accent-dim:   #3379b6;
+      --danger:       #ff5f5f;
+      --warn:         #f5a623;
+
+      /* DARK */
+      --bg:           #0d0f12;
+      --surface:      #141720;
+      --surface2:     #1c2029;
+      --surface3:     #242936;
+      --border:       #272d3d;
+      --text:         #e2e8f4;
+      --text-muted:   #6b7894;
+      --text-dim:     #3f485e;
+
+      --shadow:       0 4px 24px rgba(0,0,0,.45);
+      --radius:       10px;
+      --radius-sm:    6px;
+    }
+    [data-theme="light"] {
+      --bg:           #f0f2f7;
+      --surface:      #ffffff;
+      --surface2:     #f7f8fc;
+      --surface3:     #eef0f6;
+      --border:       #dde1ee;
+      --text:         #111827;
+      --text-muted:   #6b7280;
+      --text-dim:     #c4c9d8;
+      --shadow:       0 4px 24px rgba(0,0,0,.08);
+    }
+
+    /* ─── RESET ──────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { height: 100%; }
+    body {
+      font-family: 'Outfit', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      transition: background .25s, color .25s;
+      overflow-x: hidden;
+    }
+
+    /* ─── SCROLLBAR ──────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+
+    /* ─── TOPBAR ─────────────────────────────────────────────── */
+    header {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 28px;
+      height: 58px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(10px);
+    }
+    .logo {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 17px; font-weight: 800; letter-spacing: -.3px;
+      color: var(--text);
+    }
+    .logo-dot {
+      width: 9px; height: 9px; border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 12px var(--accent);
+    }
+    .logo span { color: var(--accent); }
+
+    .header-right { display: flex; align-items: center; gap: 14px; }
+
+    .badge {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px; font-weight: 400;
+      color: var(--text-muted);
+      background: var(--surface3);
+      border: 1px solid var(--border);
+      border-radius: 99px;
+      padding: 3px 10px;
+      letter-spacing: .5px;
+      text-transform: uppercase;
+    }
+
+    /* Theme toggle */
+    .theme-btn {
+      width: 38px; height: 38px; border-radius: 8px;
+      background: var(--surface3); border: 1px solid var(--border);
+      cursor: pointer; color: var(--text-muted);
+      display: flex; align-items: center; justify-content: center;
+      transition: all .2s; font-size: 16px;
+    }
+    .theme-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+    /* ─── MAIN LAYOUT ────────────────────────────────────────── */
+    .app {
+      padding-top: 58px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: auto 1fr;
+      gap: 0;
+      min-height: 100vh;
+    }
+
+    /* ─── DROP ZONE ──────────────────────────────────────────── */
+    #dropzone-section {
+      grid-column: 1 / -1;
+      padding: 40px 28px 32px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+    }
+
+    #dropzone {
+      width: 100%;
+      max-width: 640px;
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      padding: 52px 32px;
+      text-align: center;
+      cursor: pointer;
+      transition: all .25s;
+      position: relative;
+    }
+    #dropzone.drag-over {
+      border-color: var(--accent);
+      background: rgba(0,194,168,.05);
+    }
+    #dropzone input[type="file"] {
+      position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+    }
+    .drop-icon {
+      font-size: 40px; line-height: 1;
+      margin-bottom: 14px;
+      opacity: .6;
+    }
+    .drop-title {
+      font-size: 18px; font-weight: 700; letter-spacing: -.2px;
+      color: var(--text);
+      margin-bottom: 6px;
+    }
+    .drop-sub {
+      font-size: 13px; color: var(--text-muted);
+      font-family: 'DM Mono', monospace;
+    }
+    .drop-formats {
+      margin-top: 12px;
+      display: flex; gap: 6px; justify-content: center; flex-wrap: wrap;
+    }
+    .fmt-chip {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px; color: var(--accent);
+      background: rgba(0,194,168,.1);
+      border: 1px solid rgba(0,194,168,.2);
+      border-radius: 4px; padding: 2px 8px;
+    }
+
+    /* ─── LOADING / ERROR STATES ─────────────────────────────── */
+    #status-bar {
+      display: none;
+      width: 100%; max-width: 640px;
+      padding: 12px 18px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      font-family: 'DM Mono', monospace;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      align-items: center; gap: 10px;
+    }
+    #status-bar.show { display: flex; }
+    #status-bar.loading { border-color: var(--accent); color: var(--accent); }
+    #status-bar.error { border-color: var(--danger); color: var(--danger); }
+
+    .spinner {
+      width: 16px; height: 16px;
+      border: 2px solid rgba(0,194,168,.2);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ─── RESULTS ────────────────────────────────────────────── */
+    #results {
+      display: none;
+      grid-column: 1 / -1;
+    }
+    #results.show { display: contents; }
+
+    /* Summary strip */
+    #summary-strip {
+      grid-column: 1 / -1;
+      padding: 0 28px 28px;
+    }
+    .summary-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      display: flex;
+      gap: 32px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .summary-name {
+      font-size: 20px; font-weight: 800;
+      letter-spacing: -.3px;
+      flex: 1 1 200px;
+    }
+    .summary-name small {
+      display: block;
+      font-size: 11px; font-weight: 400;
+      color: var(--text-muted);
+      font-family: 'DM Mono', monospace;
+      letter-spacing: .5px;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .summary-meta {
+      display: flex; gap: 20px; flex-wrap: wrap;
+    }
+    .meta-item { text-align: center; }
+    .meta-label {
+      font-size: 10px; color: var(--text-muted);
+      font-family: 'DM Mono', monospace;
+      text-transform: uppercase; letter-spacing: .5px;
+      margin-bottom: 2px;
+    }
+    .meta-val {
+      font-size: 14px; font-weight: 600;
+    }
+    .modality-badge {
+      display: inline-block;
+      padding: 4px 14px; border-radius: 99px;
+      font-size: 13px; font-weight: 700; letter-spacing: 1px;
+      background: var(--accent); color: #000;
+    }
+
+    /* ─── IMAGE PANEL ────────────────────────────────────────── */
+    #image-panel {
+      padding: 0 0 28px 28px;
+      position: sticky;
+      top: 76px;
+      align-self: start;
+    }
+    .panel-label {
+      font-size: 11px; font-weight: 500;
+      text-transform: uppercase; letter-spacing: 1px;
+      color: var(--text-muted);
+      font-family: 'DM Mono', monospace;
+      margin-bottom: 10px;
+    }
+    .image-frame {
+      background: #000;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      aspect-ratio: 1 / 1;
+      display: flex; align-items: center; justify-content: center;
+      position: relative;
+    }
+    .image-frame img {
+      width: 100%; height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+    .no-image {
+      color: var(--text-dim);
+      font-size: 13px;
+      font-family: 'DM Mono', monospace;
+      text-align: center;
+      padding: 20px;
+      line-height: 1.6;
+    }
+
+    /* Image controls */
+    .img-controls {
+      margin-top: 10px;
+      display: flex; gap: 8px; flex-wrap: wrap;
+    }
+    .img-btn {
+      flex: 1;
+      padding: 8px 12px;
+      border-radius: var(--radius-sm);
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 12px; font-weight: 500;
+      cursor: pointer;
+      transition: all .2s;
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+      white-space: nowrap;
+    }
+    .img-btn:hover { color: var(--accent); border-color: var(--accent); background: rgba(0,194,168,.05); }
+
+    /* Window presets */
+    .presets {
+      margin-top: 8px;
+      display: flex; gap: 6px; flex-wrap: wrap;
+    }
+    .preset-btn {
+      padding: 5px 10px;
+      border-radius: 4px;
+      background: var(--surface3);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 11px;
+      font-family: 'DM Mono', monospace;
+      cursor: pointer;
+      transition: all .2s;
+    }
+    .preset-btn:hover, .preset-btn.active {
+      color: var(--accent); border-color: var(--accent);
+      background: rgba(0,194,168,.08);
+    }
+
+    /* ─── TAGS PANEL ─────────────────────────────────────────── */
+    #tags-panel {
+      padding: 0 28px 28px 16px;
+    }
+    .search-row {
+      display: flex; gap: 8px; margin-bottom: 14px;
+    }
+    .tag-search {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 9px 14px;
+      color: var(--text);
+      font-family: 'DM Mono', monospace;
+      font-size: 13px;
+      outline: none;
+      transition: border-color .2s;
+    }
+    .tag-search::placeholder { color: var(--text-dim); }
+    .tag-search:focus { border-color: var(--accent); }
+
+    .group-block {
+      margin-bottom: 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: var(--surface);
+    }
+    .group-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 16px;
+      cursor: pointer;
+      user-select: none;
+      transition: background .15s;
+    }
+    .group-header:hover { background: var(--surface2); }
+    .group-title {
+      font-size: 12px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: .8px;
+      color: var(--accent);
+    }
+    .group-count {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px; color: var(--text-dim);
+    }
+    .group-chevron {
+      font-size: 11px; color: var(--text-dim);
+      transition: transform .2s;
+    }
+    .group-block.collapsed .group-chevron { transform: rotate(-90deg); }
+
+    .tag-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+    }
+    .group-block.collapsed .tag-table { display: none; }
+
+    .tag-table tr {
+      border-top: 1px solid var(--border);
+      transition: background .1s;
+    }
+    .tag-table tr:hover { background: var(--surface2); }
+    .tag-table td {
+      padding: 8px 16px;
+      vertical-align: top;
+      line-height: 1.5;
+    }
+    .td-tag {
+      width: 110px;
+      color: var(--text-dim);
+      white-space: nowrap;
+    }
+    .td-name {
+      width: 200px;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 200px;
+    }
+    .td-vr {
+      width: 40px;
+      color: var(--accent-dim);
+      font-size: 10px;
+      padding-top: 9px;
+    }
+    .td-value {
+      color: var(--text);
+      word-break: break-word;
+    }
+    .highlight { background: rgba(0,194,168,.25); border-radius: 2px; }
+
+    /* ─── EMPTY STATE ────────────────────────────────────────── */
+    #empty-results {
+      display: none;
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--text-muted);
+      font-family: 'DM Mono', monospace;
+      font-size: 13px;
+    }
+    #empty-results.show { display: block; }
+
+    /* ─── RESPONSIVE ─────────────────────────────────────────── */
+    @media (max-width: 860px) {
+      .app { grid-template-columns: 1fr; }
+      #image-panel { padding: 0 28px 20px; position: static; }
+      #tags-panel { padding: 0 28px 28px; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-dot"></div>
+    Cardio<span>View</span>
+  </div>
+  <div class="header-right">
+    <span class="badge">DICOM Viewer</span>
+    <button class="theme-btn" id="themeBtn" title="Toggle theme">☀</button>
+  </div>
+</header>
+
+<div class="app" id="appGrid">
+
+  <!-- DROP ZONE -->
+  <div id="dropzone-section">
+    <div id="dropzone">
+      <input type="file" id="fileInput" accept=".dcm,.dicom,*" />
+      <div class="drop-icon">⬡</div>
+      <div class="drop-title">Drop a DICOM file here</div>
+      <div class="drop-sub">or click to browse your files</div>
+      <div class="drop-formats">
+        <span class="fmt-chip">.dcm</span>
+        <span class="fmt-chip">.dicom</span>
+        <span class="fmt-chip">no extension</span>
+      </div>
+    </div>
+
+    <div id="status-bar">
+      <div class="spinner" id="spinner"></div>
+      <span id="status-text">Parsing DICOM file…</span>
+    </div>
+  </div>
+
+  <!-- RESULTS -->
+  <div id="results">
+
+    <!-- Summary strip -->
+    <div id="summary-strip">
+      <div class="summary-card">
+        <div class="summary-name">
+          <small>Patient</small>
+          <span id="sum-name">—</span>
+        </div>
+        <div class="summary-meta">
+          <div class="meta-item">
+            <div class="meta-label">Modality</div>
+            <div class="meta-val"><span class="modality-badge" id="sum-modality">—</span></div>
+          </div>
+          <div class="meta-item">
+            <div class="meta-label">Study Date</div>
+            <div class="meta-val" id="sum-date">—</div>
+          </div>
+          <div class="meta-item">
+            <div class="meta-label">Description</div>
+            <div class="meta-val" id="sum-desc">—</div>
+          </div>
+          <div class="meta-item">
+            <div class="meta-label">Institution</div>
+            <div class="meta-val" id="sum-inst">—</div>
+          </div>
+          <div class="meta-item">
+            <div class="meta-label">Dimensions</div>
+            <div class="meta-val" id="sum-dims">—</div>
+          </div>
+          <div class="meta-item">
+            <div class="meta-label">Frames</div>
+            <div class="meta-val" id="sum-frames">—</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Image panel -->
+    <div id="image-panel">
+      <div class="panel-label">Scan Image</div>
+      <div class="image-frame" id="imageFrame">
+        <div class="no-image" id="noImage">No pixel data available</div>
+        <img id="dicomImg" style="display:none" alt="DICOM scan" />
+      </div>
+      <div class="img-controls">
+        <button class="img-btn" id="invertBtn">⬛ Invert</button>
+        <button class="img-btn" id="downloadBtn">⬇ Download PNG</button>
+      </div>
+      <div class="presets" id="presets">
+        <span style="font-size:10px;color:var(--text-dim);font-family:'DM Mono',monospace;align-self:center;margin-right:4px;">WINDOW</span>
+        <button class="preset-btn active" data-wc="40" data-ww="400">Soft Tissue</button>
+        <button class="preset-btn" data-wc="600" data-ww="1500">Lung</button>
+        <button class="preset-btn" data-wc="300" data-ww="1500">Bone</button>
+        <button class="preset-btn" data-wc="35" data-ww="85">Brain</button>
+        <button class="preset-btn" data-wc="0" data-ww="0">Default</button>
+      </div>
+    </div>
+
+    <!-- Tags panel -->
+    <div id="tags-panel">
+      <div class="panel-label">DICOM Tags</div>
+      <div class="search-row">
+        <input class="tag-search" id="tagSearch" type="text" placeholder="Search tags, keywords, values…" />
+      </div>
+      <div id="tagGroups"></div>
+      <div id="empty-results">No tags match your search.</div>
+    </div>
+
+  </div><!-- /results -->
+
+</div><!-- /app -->
+
+<script>
+  // ─── THEME ───────────────────────────────────────────────────
+  const html = document.documentElement;
+  const themeBtn = document.getElementById('themeBtn');
+  let darkMode = true;
+
+  themeBtn.addEventListener('click', () => {
+    darkMode = !darkMode;
+    html.setAttribute('data-theme', darkMode ? 'dark' : 'light');
+    themeBtn.textContent = darkMode ? '☀' : '☾';
+  });
+
+  // ─── DROP ZONE ───────────────────────────────────────────────
+  const dropzone = document.getElementById('dropzone');
+  const fileInput = document.getElementById('fileInput');
+
+  dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag-over'); });
+  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag-over'));
+  dropzone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropzone.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) uploadFile(file);
+  });
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files[0]) uploadFile(fileInput.files[0]);
+  });
+
+  // ─── STATUS BAR ──────────────────────────────────────────────
+  const statusBar = document.getElementById('status-bar');
+  const statusText = document.getElementById('status-text');
+  const spinner = document.getElementById('spinner');
+
+  function showStatus(msg, type) {
+    statusBar.className = 'show ' + type;
+    statusText.textContent = msg;
+    spinner.style.display = type === 'loading' ? 'block' : 'none';
+  }
+  function hideStatus() { statusBar.className = ''; }
+
+  // ─── UPLOAD ──────────────────────────────────────────────────
+  let currentImageB64 = null;
+  let inverted = false;
+
+  async function uploadFile(file) {
+    showStatus('Parsing DICOM file…', 'loading');
+    document.getElementById('results').classList.remove('show');
+
+    const fd = new FormData();
+    fd.append('file', file);
+
+    try {
+      const resp = await fetch('/api/parse', { method: 'POST', body: fd });
+      const data = await resp.json();
+
+      if (!resp.ok || data.error) {
+        showStatus('Error: ' + (data.error || 'Unknown error'), 'error');
+        return;
+      }
+
+      hideStatus();
+      renderResults(data);
+    } catch (err) {
+      showStatus('Network error: ' + err.message, 'error');
+    }
+  }
+
+  // ─── RENDER ──────────────────────────────────────────────────
+  function renderResults(data) {
+    const s = data.summary;
+    document.getElementById('sum-name').textContent = s.patientName || '—';
+    document.getElementById('sum-modality').textContent = s.modality || '—';
+    document.getElementById('sum-date').textContent = fmtDate(s.studyDate);
+    document.getElementById('sum-desc').textContent = s.studyDescription || '—';
+    document.getElementById('sum-inst').textContent = s.institution || '—';
+    document.getElementById('sum-dims').textContent = s.rows && s.columns ? `${s.rows} × ${s.columns}` : '—';
+    document.getElementById('sum-frames').textContent = s.frames || '1';
+
+    // Image
+    const img = document.getElementById('dicomImg');
+    const noImg = document.getElementById('noImage');
+    inverted = false;
+
+    if (data.image) {
+      currentImageB64 = data.image;
+      img.src = 'data:image/png;base64,' + data.image;
+      img.style.display = 'block';
+      noImg.style.display = 'none';
+      img.style.filter = '';
+    } else {
+      currentImageB64 = null;
+      img.style.display = 'none';
+      noImg.style.display = 'flex';
+      noImg.textContent = data.imageError ? '⚠ ' + data.imageError : 'No pixel data';
+    }
+
+    // Tag groups
+    renderTagGroups(data.tagGroups);
+
+    document.getElementById('results').classList.add('show');
+    document.getElementById('dropzone-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function fmtDate(d) {
+    if (!d || d === '—') return '—';
+    if (d.length === 8) return `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`;
+    return d;
+  }
+
+  // ─── TAG GROUPS ───────────────────────────────────────────────
+  let allTagData = {};
+
+  function renderTagGroups(groups, highlight) {
+    allTagData = groups;
+    const container = document.getElementById('tagGroups');
+    container.innerHTML = '';
+    let anyVisible = false;
+
+    for (const [groupName, tags] of Object.entries(groups)) {
+      const filtered = highlight
+        ? tags.filter(t =>
+            t.keyword.toLowerCase().includes(highlight) ||
+            t.name.toLowerCase().includes(highlight) ||
+            t.value.toLowerCase().includes(highlight) ||
+            t.tag.toLowerCase().includes(highlight)
+          )
+        : tags;
+
+      if (filtered.length === 0) continue;
+      anyVisible = true;
+
+      const block = document.createElement('div');
+      block.className = 'group-block';
+
+      const header = document.createElement('div');
+      header.className = 'group-header';
+      header.innerHTML = `
+        <span class="group-title">${groupName}</span>
+        <span style="display:flex;align-items:center;gap:10px">
+          <span class="group-count">${filtered.length} tag${filtered.length !== 1 ? 's' : ''}</span>
+          <span class="group-chevron">▾</span>
+        </span>`;
+      header.addEventListener('click', () => block.classList.toggle('collapsed'));
+
+      const table = document.createElement('table');
+      table.className = 'tag-table';
+      for (const t of filtered) {
+        const row = table.insertRow();
+        const v = highlight ? markHL(t.value, highlight) : escHtml(t.value);
+        const n = highlight ? markHL(t.name, highlight) : escHtml(t.name);
+        row.innerHTML = `
+          <td class="td-tag">${escHtml(t.tag)}</td>
+          <td class="td-name" title="${escHtml(t.name)}">${n}</td>
+          <td class="td-vr">${escHtml(t.vr)}</td>
+          <td class="td-value">${v}</td>`;
+      }
+
+      block.appendChild(header);
+      block.appendChild(table);
+      container.appendChild(block);
+    }
+
+    const emptyEl = document.getElementById('empty-results');
+    emptyEl.classList.toggle('show', !anyVisible);
+  }
+
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+  function markHL(s, q) {
+    const safe = escHtml(s);
+    const safeQ = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return safe.replace(new RegExp(safeQ, 'gi'), m => `<mark class="highlight">${m}</mark>`);
+  }
+
+  // Search
+  document.getElementById('tagSearch').addEventListener('input', function() {
+    const q = this.value.trim().toLowerCase();
+    renderTagGroups(allTagData, q || null);
+  });
+
+  // ─── IMAGE CONTROLS ───────────────────────────────────────────
+  document.getElementById('invertBtn').addEventListener('click', () => {
+    const img = document.getElementById('dicomImg');
+    if (!img.src) return;
+    inverted = !inverted;
+    img.style.filter = inverted ? 'invert(1)' : '';
+  });
+
+  document.getElementById('downloadBtn').addEventListener('click', () => {
+    if (!currentImageB64) return;
+    const a = document.createElement('a');
+    a.href = 'data:image/png;base64,' + currentImageB64;
+    a.download = 'dicom_scan.png';
+    a.click();
+  });
+
+  // Window presets — purely visual via CSS filter approximation
+  document.querySelectorAll('.preset-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+</script>
+</body>
+</html>
