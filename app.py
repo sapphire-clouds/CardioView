@@ -56,7 +56,7 @@ def safe_str(val):
 
 
 def serialize_element(elem, depth=0):
-    MAX_DEPTH = 5
+    MAX_DEPTH = 12
     result = {
         "tag":      str(elem.tag),
         "keyword":  elem.keyword or "",
@@ -201,8 +201,8 @@ GROUP_KEYWORD_MAP = {
         "RotationDirection","ExposureModulationType","EstimatedDoseSaving",
         "CTDIvol","SingleCollimationWidth","TotalCollimationWidth",
         "TableFeedPerRotation","SpiralPitchFactor","DataCollectionDiameter",
-        "FilterType","GeneratorPower","FocalSpots","ExposureInuAs",
-        "TableSpeed","TableFeedPerRotation","RevolutionTime","CTDIPhantomTypeCodeSequence",
+        "FilterType","GeneratorPower","ExposureInuAs",
+        "TableSpeed","RevolutionTime","CTDIPhantomTypeCodeSequence",
     ],
     "MR": [
         "ScanningSequence","SequenceVariant","ScanOptions","MRAcquisitionType",
@@ -211,24 +211,19 @@ GROUP_KEYWORD_MAP = {
         "ParallelReductionFactorInPlane","AcquisitionContrast","EffectiveEchoTime",
         "ParallelAcquisitionTechnique","PartialFourierDirection",
         "DiffusionBValue","DiffusionGradientOrientation","VelocityEncodingDirection",
-        "VelocityEncodingMinimumValue","SpectrallySelectedExcitation",
     ],
     "NM / PET": [
-        "RadiopharmaceuticalInformationSequence","EnergyWindowInformationSequence",
-        "DetectorInformationSequence","NumberOfDetectors","NumberOfEnergyWindows",
-        "TypeOfDetectorMotion","CollimatorType","SliceProgressionDirection",
-        "DecayCorrection","CorrectedImage","RandomsCorrectionMethod",
-        "AttenuationCorrectionMethod","ScatterCorrectionMethod","Units",
-        "SUVType","DecayFactor","DoseCalibrationFactor","ScatterFractionFactor",
+        "RadiopharmaceuticalInformationSequence","Radiopharmaceutical",
+        "RadionuclideCodeSequence","RadiopharmaceuticalStartTime",
+        "RadiopharmaceuticalStopTime","RadionuclideTotalDose","RadiopharmaceuticalVolume",
+        "RadiopharmaceuticalRoute","RadiopharmaceuticalCodeSequence",
+        "EstimatedRadiographicMagnificationFactor","GateInformationSequence",
+        "EnergyWindowInformationSequence","DetectorInformationSequence",
+        "RotationInformationSequence","NumberOfSlices","SliceVector",
+        "AngularStep","ZoomFactor","ScanArc","ActualFrameDuration",
     ],
-    "SOP / Meta": [
-        "SOPClassUID","SOPInstanceUID","TransferSyntaxUID","SpecificCharacterSet",
-        "ImplementationClassUID","ImplementationVersionName",
-        "SourceApplicationEntityTitle","MediaStorageSOPClassUID",
-        "MediaStorageSOPInstanceUID","FileMetaInformationVersion",
-        "FileMetaInformationGroupLength","SendingApplicationEntityTitle",
-        "ReceivingApplicationEntityTitle","PrivateInformationCreatorUID",
-    ],
+    "SOP / Meta": [],
+    "Other": [],
 }
 
 _KW_TO_GROUP = {}
@@ -286,31 +281,21 @@ def parse_dataset(ds):
 
 # ─── IMAGE EXTRACTION ─────────────────────────────────────────────────────────
 
-def extract_image(ds):
-    try:
-        pixel_array = ds.pixel_array
-    except Exception as e:
-        return None, str(e)
+def normalize_frame(arr, ds=None, apply_window=True):
+    """Normalize a 2D or 3D numpy array frame to uint8 PNG base64."""
+    img = arr.astype(np.float64)
 
-    try:
-        # Multi-frame: pick middle frame
-        arr = pixel_array
-        if arr.ndim == 4:
-            arr = arr[arr.shape[0] // 2]
-        elif arr.ndim == 3 and arr.shape[0] > 4:
-            arr = arr[arr.shape[0] // 2]
-
-        img = arr.astype(np.float64)
-
-        # Modality LUT
+    # Modality LUT
+    if ds is not None:
         slope     = float(getattr(ds, "RescaleSlope", 1) or 1)
         intercept = float(getattr(ds, "RescaleIntercept", 0) or 0)
         img = img * slope + intercept
 
-        # VOI windowing
+    # VOI windowing
+    applied_window = False
+    if apply_window and ds is not None:
         wc_raw = getattr(ds, "WindowCenter", None)
         ww_raw = getattr(ds, "WindowWidth", None)
-        applied_window = False
         if wc_raw is not None and ww_raw is not None:
             try:
                 wc = float(wc_raw[0] if isinstance(wc_raw, (list, MultiValue)) else wc_raw)
@@ -323,32 +308,74 @@ def extract_image(ds):
             except Exception:
                 pass
 
-        if not applied_window:
-            mn, mx = img.min(), img.max()
-            img = (img - mn) / (mx - mn) * 255.0 if mx > mn else np.zeros_like(img)
+    if not applied_window:
+        mn, mx = img.min(), img.max()
+        img = (img - mn) / (mx - mn) * 255.0 if mx > mn else np.zeros_like(img)
 
-        img_u8 = img.astype(np.uint8)
+    img_u8 = img.astype(np.uint8)
 
+    pi = ""
+    if ds is not None:
         pi = str(getattr(ds, "PhotometricInterpretation", "MONOCHROME2")).strip()
 
-        from PIL import Image as PILImage
-        if img_u8.ndim == 3 and img_u8.shape[-1] == 3:
-            pil = PILImage.fromarray(img_u8, "RGB")
-        elif img_u8.ndim == 3 and img_u8.shape[-1] == 4:
-            pil = PILImage.fromarray(img_u8, "RGBA").convert("RGB")
-        elif pi in ("RGB", "YBR_FULL", "YBR_FULL_422") and img_u8.ndim == 3:
-            pil = PILImage.fromarray(img_u8, "RGB")
-        else:
-            if img_u8.ndim == 3:
-                img_u8 = img_u8[..., 0]
-            pil = PILImage.fromarray(img_u8, "L").convert("RGB")
+    from PIL import Image as PILImage
+    if img_u8.ndim == 3 and img_u8.shape[-1] == 3:
+        pil = PILImage.fromarray(img_u8, "RGB")
+    elif img_u8.ndim == 3 and img_u8.shape[-1] == 4:
+        pil = PILImage.fromarray(img_u8, "RGBA").convert("RGB")
+    elif pi in ("RGB", "YBR_FULL", "YBR_FULL_422") and img_u8.ndim == 3:
+        pil = PILImage.fromarray(img_u8, "RGB")
+    else:
+        if img_u8.ndim == 3:
+            img_u8 = img_u8[..., 0]
+        pil = PILImage.fromarray(img_u8, "L").convert("RGB")
 
-        buf = io.BytesIO()
-        pil.save(buf, format="PNG", optimize=True)
-        return base64.b64encode(buf.getvalue()).decode(), None
+    buf = io.BytesIO()
+    pil.save(buf, format="PNG", optimize=True)
+    return base64.b64encode(buf.getvalue()).decode()
 
+
+def extract_image(ds):
+    try:
+        pixel_array = ds.pixel_array
     except Exception as e:
         return None, str(e)
+
+    try:
+        arr = pixel_array
+        if arr.ndim == 4:
+            arr = arr[arr.shape[0] // 2]
+        elif arr.ndim == 3 and arr.shape[0] > 4:
+            arr = arr[arr.shape[0] // 2]
+
+        return normalize_frame(arr, ds), None
+    except Exception as e:
+        return None, str(e)
+
+
+def extract_all_frames(ds):
+    """Return list of base64 PNG strings for every frame in the dataset."""
+    try:
+        pixel_array = ds.pixel_array
+    except Exception as e:
+        return [], str(e)
+
+    try:
+        arr = pixel_array
+        frames = []
+
+        # Multi-frame: (N, H, W) or (N, H, W, C)
+        if arr.ndim == 4 or (arr.ndim == 3 and arr.shape[0] > 4):
+            n = arr.shape[0]
+            for i in range(n):
+                frames.append(normalize_frame(arr[i], ds))
+        else:
+            # Single frame
+            frames.append(normalize_frame(arr, ds))
+
+        return frames, None
+    except Exception as e:
+        return [], str(e)
 
 
 # ─── SUMMARY ─────────────────────────────────────────────────────────────────
@@ -440,6 +467,69 @@ def api_parse():
         })
     except Exception as e:
         return jsonify({"error": f"Parse error: {e}\n{traceback.format_exc()}"}), 500
+
+
+@app.route("/api/parse_series", methods=["POST"])
+def api_parse_series():
+    """
+    Accept multiple DICOM files and return all frames as a flat ordered list.
+    Each file contributes one or more frames (if multi-frame DICOM).
+    Returns: { ok, totalFrames, frames: [{filename, frameIndex, image}], summary, tagGroups, totalTags }
+    """
+    files = request.files.getlist("files")
+    if not files:
+        return jsonify({"error": "No files provided"}), 400
+
+    all_frames = []
+    first_summary = None
+    first_tag_groups = None
+    first_total_tags = 0
+    errors = []
+
+    for f in files:
+        if not f.filename:
+            continue
+        filepath = os.path.join(UPLOAD_FOLDER, f.filename)
+        f.save(filepath)
+
+        try:
+            ds = dcmread(filepath, force=True)
+        except Exception as e:
+            errors.append(f"{f.filename}: Cannot read — {e}")
+            continue
+
+        try:
+            frames, frame_err = extract_all_frames(ds)
+            if frame_err and not frames:
+                errors.append(f"{f.filename}: {frame_err}")
+                continue
+
+            for idx, img_b64 in enumerate(frames):
+                all_frames.append({
+                    "filename": f.filename,
+                    "frameIndex": idx,
+                    "image": img_b64,
+                })
+
+            if first_summary is None:
+                first_summary = build_summary(ds)
+                first_tag_groups, first_total_tags = parse_dataset(ds)
+
+        except Exception as e:
+            errors.append(f"{f.filename}: {e}")
+
+    if not all_frames:
+        return jsonify({"error": "No frames could be extracted. " + "; ".join(errors)}), 400
+
+    return jsonify({
+        "ok": True,
+        "totalFrames": len(all_frames),
+        "frames": all_frames,
+        "summary": first_summary,
+        "tagGroups": first_tag_groups,
+        "totalTags": first_total_tags,
+        "errors": errors,
+    })
 
 
 if __name__ == "__main__":
