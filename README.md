@@ -1,6 +1,6 @@
-# CardioView — DICOM Viewer
+# CardioView
 
-A lightweight, browser-based DICOM viewer built with Flask and vanilla JavaScript. Drag-and-drop DICOM files, inspect pixel data with windowing/brightness controls, explore all DICOM tags in a searchable tree, and play back entire image series as smooth animations.
+A browser-based DICOM viewer built with Flask and vanilla JS. Drag in a `.dcm` file and it renders the image, parses every tag, and lets you scrub through multi-frame series — no PACS, no plugins, nothing leaving your machine.
 
 ![Dark mode screenshot placeholder](https://placehold.co/900x480/080B10/0FBFA0?text=CardioView+DICOM+Viewer)
 
@@ -8,22 +8,41 @@ A lightweight, browser-based DICOM viewer built with Flask and vanilla JavaScrip
 
 ## Features
 
-- **DICOM parsing** — reads `.dcm` / `.dicom` and extension-less files using pydicom
-- **Image viewer** — zoom (scroll wheel), pan (drag), brightness & contrast sliders, invert, and PNG export
-- **Multi-frame playback** — load a single multi-frame DICOM *or* a folder of individual slices and play them back as a video/animation
-- **Series filmstrip** — thumbnail strip with click-to-seek; keyboard `←` `→` to step, `Space` to play/pause
-- **Adjustable FPS** — 1 – 60 fps slider to control animation speed
-- **DICOM tag tree** — all tags grouped by category (Patient, Study, Series, Equipment, Image, CT, MR, Cardiac, …) with full-text search and nested sequence expansion
-- **Patient/study banner** — key metadata shown at a glance (modality, dimensions, institution, equipment)
-- **Dark / light theme** toggle
-- **Responsive layout** — usable on tablets and smaller screens
+**Viewer**
+- Canvas rendering with scroll-to-zoom, drag-to-pan, and pinch-to-zoom on touch
+- Brightness and contrast sliders, invert toggle
+- Built-in clinical W/L presets: Brain, Subdural, Stroke, Lung, Bone, Liver, Soft Tissue, Vascular, and more
+- Pan minimap — appears in the corner when zoomed in so you don't lose your place
+- Save current view as PNG (filters included)
+- Resizable image / tag panel divider
+- Dark and light theme toggle
+
+**Series playback**
+- Load multiple files at once — sorted by `InstanceNumber` then `SliceLocation` server-side
+- Filmstrip thumbnail strip with click-to-seek
+- Play/pause with adjustable FPS (1–60)
+- First / prev / next / last controls and a scrubber
+- Append more files to an existing series without clearing it
+- Drag multiple files directly onto the viewer to load as series
+
+**Tag browser**
+- Every tag grouped by category: Patient, Study, Series, Equipment, Image, CT, MR, Cardiac, NM/PET, etc.
+- Sorted view (grouped) or unsorted view (raw file order)
+- Full-text search across tag IDs, names, keywords, and values with match highlighting
+- Collapsible sequence (SQ) items with nested child tags
+- Expand all / collapse all
+
+**General**
+- Patient banner: name, ID, DOB, sex, age, modality, study date, dimensions, frame count, institution
+- Responsive layout — stacks vertically on narrow screens
+- Keyboard shortcuts overlay (press `?` in the viewer)
 
 ---
 
-## Tech Stack
+## Tech stack
 
 | Layer    | Technology |
-|----------|-----------|
+|----------|------------|
 | Backend  | Python 3 · Flask · pydicom · NumPy · Pillow |
 | Frontend | Vanilla JS · Canvas API · HTML5 / CSS3 |
 | Fonts    | JetBrains Mono · Inter (Google Fonts) |
@@ -33,14 +52,14 @@ A lightweight, browser-based DICOM viewer built with Flask and vanilla JavaScrip
 
 ## Installation
 
-### 1. Clone the repository
+### 1. Clone the repo
 
 ```bash
 git clone https://github.com/your-username/cardioview.git
 cd cardioview
 ```
 
-### 2. Create a virtual environment (recommended)
+### 2. Create a virtual environment
 
 ```bash
 python -m venv .venv
@@ -55,20 +74,25 @@ pip install -r requirements.txt
 
 ### 4. Place the frontend
 
-The Flask app serves `static/index.html`. Copy or move the frontend file:
-
 ```bash
 mkdir -p static
 cp index.html static/index.html
 ```
 
-### 5. Run the server
+### 5. Run
 
 ```bash
 python app.py
 ```
 
-Open your browser at **http://localhost:5000**.
+Open **http://localhost:5000**.
+
+For production, use a real WSGI server instead of Flask's dev server:
+
+```bash
+pip install waitress
+waitress-serve --port=5000 app:app
+```
 
 ---
 
@@ -76,54 +100,66 @@ Open your browser at **http://localhost:5000**.
 
 ### Single file
 
-Drag a `.dcm` file onto the drop zone (or click to browse). The image renders immediately with DICOM windowing applied. Use the **Brightness** and **Contrast** sliders to adjust, **⬛ Invert** to flip polarity, and **⬇ Save PNG** to download the current view.
+Drag a `.dcm` file onto the drop zone (or click to browse). The image renders with DICOM windowing applied automatically. Use the **Brightness** and **Contrast** sliders to adjust, **Invert** to flip polarity, and **Save PNG** to download the current view.
 
-### Series / animation playback
+### Series / animation
 
-1. Open a single DICOM file first (or skip straight to step 2).
-2. In the **Series Playback** panel below the sliders, drop multiple DICOM files (or click **+ Add DICOM files**). You can also use the **Load Series** button in the top-right header.
-3. Each file is parsed server-side; all frames are extracted (including multi-frame DICOMs) and returned as a flat ordered sequence.
-4. A filmstrip of thumbnails appears. Click any thumbnail to jump to that frame.
-5. Use the transport controls: **⏮ ⏴ ▶ ⏵ ⏭** or the scrubber to navigate.
-6. Adjust **FPS** (1 – 60) to change animation speed.
-7. Keyboard shortcuts: `←` / `→` to step frames, `Space` to play/pause.
+1. Drop multiple DICOM files onto the drop zone, or use **Load Series** in the header, or click the **+** button in the Series Playback panel to append files to an existing series.
+2. Files are parsed and sorted server-side. All frames are extracted — including multi-frame DICOMs — and returned as a flat ordered sequence.
+3. A filmstrip of thumbnails appears. Click any thumbnail to jump to that frame.
+4. Use the transport controls (**⏮ ⏴ ▶ ⏵ ⏭**) or the scrubber to navigate. Adjust FPS to change playback speed.
 
-> **Tip — CT series:** Select all `.dcm` files for a CT study at once (Ctrl+A in the file browser). CardioView will sort them by upload order and play them as a stack flythrough.
+> **CT tip:** Select all `.dcm` files for a study at once (Ctrl+A). CardioView sorts by instance number so the stack plays in the correct anatomical order.
 
-### DICOM tag explorer
+### Tag explorer
 
-The right panel shows every tag in the file, grouped into categories. Use the search box to filter by tag address, keyword, name, or value. Nested sequences (SQ) are expandable.
+The right panel shows every tag in the file. Search by tag address, keyword, name, or value. Nested sequences are expandable. Toggle between **Sorted** (grouped by category) and **Unsorted** (raw file order) views.
 
 ---
 
-## API Endpoints
+## Keyboard shortcuts
+
+| Key | Action |
+|-----|--------|
+| `Scroll` | Zoom in / out |
+| `Drag` | Pan image |
+| `Pinch` | Zoom (touch) |
+| `R` | Reset image (zoom, pan, filters) |
+| `←` / `→` | Previous / next frame |
+| `Space` | Play / pause series |
+| `Esc` | Close shortcuts overlay |
+| `?` | Show shortcuts overlay |
+
+---
+
+## API
+
+Both endpoints accept `multipart/form-data`.
 
 ### `POST /api/parse`
 
-Parse a single DICOM file and return image + all tags.
+Single file.
 
-**Request:** `multipart/form-data` with field `file`.
+**Request:** `file` — one `.dcm` file
 
 **Response:**
 ```json
 {
   "ok": true,
   "filename": "scan.dcm",
-  "summary": { "patientName": "...", "modality": "CT", ... },
-  "tagGroups": { "Patient": [...], "Study": [...], ... },
+  "summary": { "patientName": "...", "modality": "CT", "rows": "512", ... },
+  "tagGroups": { "Patient": [...], "CT": [...] },
   "totalTags": 142,
   "image": "<base64 PNG>",
   "imageError": null
 }
 ```
 
----
-
 ### `POST /api/parse_series`
 
-Parse multiple DICOM files and extract all frames as a series.
+Multiple files. Sorted by `InstanceNumber` then `SliceLocation` before processing.
 
-**Request:** `multipart/form-data` with one or more fields named `files`.
+**Request:** `files` — one or more `.dcm` files
 
 **Response:**
 ```json
@@ -131,8 +167,7 @@ Parse multiple DICOM files and extract all frames as a series.
   "ok": true,
   "totalFrames": 64,
   "frames": [
-    { "filename": "slice_001.dcm", "frameIndex": 0, "image": "<base64 PNG>" },
-    ...
+    { "filename": "IM001.dcm", "frameIndex": 0, "image": "<base64 PNG>" }
   ],
   "summary": { ... },
   "tagGroups": { ... },
@@ -141,64 +176,56 @@ Parse multiple DICOM files and extract all frames as a series.
 }
 ```
 
+Partial success is fine — failed files appear in `errors`, the rest still load.
+
 ---
 
-## Project Structure
+## Project structure
 
 ```
 cardioview/
 ├── app.py              # Flask backend — parsing, windowing, series API
-├── requirements.txt    # Python dependencies
+├── requirements.txt
 ├── static/
-│   └── index.html      # Single-file frontend (CSS + JS inline)
-├── uploads/            # Temporary upload directory (auto-created)
+│   └── index.html      # Entire frontend — viewer, tag browser, series player
 └── README.md
 ```
 
----
-
-## Requirements
-
-```
-flask>=3.0.0
-flask-cors>=4.0.0
-pydicom>=2.4.0
-numpy>=1.24.0
-Pillow>=10.0.0
-```
-
-Python 3.9+ recommended.
+No build step. Everything frontend is a single self-contained HTML file.
 
 ---
 
-## Supported DICOM Types
+## Supported DICOM types
 
 | Type | Notes |
 |------|-------|
-| CT | Full windowing (WC/WW) applied |
-| MR | Auto-normalized if no window tags |
-| X-Ray / CR / DX | Monochrome & RGB |
+| CT | Full WC/WW windowing applied |
+| MR | Auto-normalized if no window tags present |
+| X-Ray / CR / DX | Monochrome and RGB |
 | NM / PET | Frame extraction supported |
 | Multi-frame DICOM | All frames extracted from a single file |
-| Uncompressed & JPEG/RLE | pydicom handles decompression |
+| JPEG Lossless (Process 14) | Handled via pylibjpeg |
+| JPEG 2000 | Requires `pylibjpeg-openjpeg` |
+| RLE Lossless | Built into pydicom |
 
 ---
 
-## Limitations
+## Known limitations
 
+- All frames are base64-encoded in a single response — large series (500+ frames) will be slow
 - No DICOMDIR or WADO-RS support (plain file upload only)
-- Series ordering follows upload order — rename files with zero-padded numbers for correct slice order (e.g. `slice_001.dcm`, `slice_002.dcm`, …)
-- Uploaded files are stored temporarily on disk in `uploads/`; no auto-cleanup is implemented
+- No authentication — built for local or trusted network use
+- CORS is open (`*`) — restrict it before deploying anywhere public
 - Not intended for clinical diagnostic use
-
----
-
-## License
-
-MIT — see `LICENSE` for details.
 
 ---
 
 ## Contributing
 
-Pull requests are welcome. For major changes please open an issue first to discuss what you would like to change.
+Pull requests are welcome. For major changes please open an issue first.
+
+---
+
+## License
+
+MIT

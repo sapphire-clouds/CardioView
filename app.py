@@ -1,4 +1,5 @@
 import os
+import uuid
 import base64
 import io
 import traceback
@@ -7,19 +8,18 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import pydicom
 from pydicom import dcmread
+from pydicom.errors import InvalidDicomError
 from pydicom.uid import UID
 from pydicom.sequence import Sequence
 from pydicom.multival import MultiValue
 import warnings
+import tempfile
 
 warnings.filterwarnings("ignore")
 
 app = Flask(__name__, static_folder="static")
+app.config["MAX_CONTENT_LENGTH"] = 512 * 1024 * 1024  # 512 MB hard limit
 CORS(app)
-
-UPLOAD_FOLDER = "uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
 
 # ─── VALUE SERIALIZATION ──────────────────────────────────────────────────────
 
@@ -400,6 +400,35 @@ def fmt_date(d):
     return d
 
 
+def get_window_presets(ds):
+    """Extract all window center/width pairs and their explanations."""
+    presets = []
+    try:
+        wc_raw = getattr(ds, "WindowCenter", None)
+        ww_raw = getattr(ds, "WindowWidth", None)
+        exp_raw = getattr(ds, "WindowCenterWidthExplanation", None)
+
+        if wc_raw is None or ww_raw is None:
+            return presets
+
+        wcs = list(wc_raw) if isinstance(wc_raw, (MultiValue, list)) else [wc_raw]
+        wws = list(ww_raw) if isinstance(ww_raw, (MultiValue, list)) else [ww_raw]
+        exps = list(exp_raw) if isinstance(exp_raw, (MultiValue, list)) else ([exp_raw] if exp_raw else [])
+
+        for i, (wc, ww) in enumerate(zip(wcs, wws)):
+            label = str(exps[i]).strip() if i < len(exps) else f"Preset {i+1}"
+            if not label or label == "—":
+                label = f"Preset {i+1}"
+            presets.append({
+                "label": label,
+                "wc": float(wc),
+                "ww": float(ww),
+            })
+    except Exception:
+        pass
+    return presets
+
+
 def build_summary(ds):
     bd = ga(ds, "PatientBirthDate")
     sd = ga(ds, "StudyDate")
@@ -426,7 +455,26 @@ def build_summary(ds):
         "wc":           ga(ds, "WindowCenter"),
         "ww":           ga(ds, "WindowWidth"),
         "transferSyntax": ga(ds, "TransferSyntaxUID"),
+        "windowPresets":  get_window_presets(ds),
     }
+
+
+def sort_dicom_files(file_ds_pairs):
+    """Sort (filepath, ds) pairs by InstanceNumber then SliceLocation."""
+    def sort_key(pair):
+        _, ds = pair
+        inst = None
+        try:
+            inst = int(getattr(ds, "InstanceNumber", None) or 0)
+        except Exception:
+            inst = 0
+        loc = None
+        try:
+            loc = float(getattr(ds, "SliceLocation", None) or 0.0)
+        except Exception:
+            loc = 0.0
+        return (inst, loc)
+    return sorted(file_ds_pairs, key=sort_key)
 
 
 # ─── ROUTES ───────────────────────────────────────────────────────────────────
@@ -444,79 +492,125 @@ def api_parse():
     if not f.filename:
         return jsonify({"error": "Empty filename"}), 400
 
-    filepath = os.path.join(UPLOAD_FOLDER, f.filename)
-    f.save(filepath)
-
+    # Write to a secure temp file — never use original filename on disk
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".dcm")
     try:
-        ds = dcmread(filepath, force=True)
-    except Exception as e:
-        return jsonify({"error": f"Cannot read DICOM: {e}"}), 400
+        f.save(tmp.name)
+        tmp.close()
 
-    try:
-        summary = build_summary(ds)
-        tag_groups, total_tags = parse_dataset(ds)
-        img_b64, img_err = extract_image(ds)
-        return jsonify({
-            "ok": True,
-            "filename": f.filename,
-            "summary": summary,
-            "tagGroups": tag_groups,
-            "totalTags": total_tags,
-            "image": img_b64,
-            "imageError": img_err,
-        })
-    except Exception as e:
-        return jsonify({"error": f"Parse error: {e}\n{traceback.format_exc()}"}), 500
+        try:
+            ds = dcmread(tmp.name)
+        except InvalidDicomError:
+            return jsonify({"error": "Not a valid DICOM file"}), 400
+        except Exception as e:
+            return jsonify({"error": f"Cannot read DICOM: {e}"}), 400
+
+        try:
+            summary = build_summary(ds)
+            tag_groups, total_tags = parse_dataset(ds)
+            img_b64, img_err = extract_image(ds)
+            return jsonify({
+                "ok": True,
+                "filename": f.filename,
+                "summary": summary,
+                "tagGroups": tag_groups,
+                "totalTags": total_tags,
+                "image": img_b64,
+                "imageError": img_err,
+            })
+        except Exception as e:
+            return jsonify({"error": f"Parse error: {e}\n{traceback.format_exc()}"}), 500
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except Exception:
+            pass
 
 
 @app.route("/api/parse_series", methods=["POST"])
 def api_parse_series():
     """
-    Accept multiple DICOM files and return all frames as a flat ordered list.
-    Each file contributes one or more frames (if multi-frame DICOM).
-    Returns: { ok, totalFrames, frames: [{filename, frameIndex, image}], summary, tagGroups, totalTags }
+    Accept multiple DICOM files, sort by InstanceNumber/SliceLocation,
+    and return all frames as a flat ordered list.
     """
     files = request.files.getlist("files")
     if not files:
         return jsonify({"error": "No files provided"}), 400
 
-    all_frames = []
-    first_summary = None
-    first_tag_groups = None
-    first_total_tags = 0
+    tmp_paths = []
+    file_ds_pairs = []
     errors = []
 
     for f in files:
         if not f.filename:
             continue
-        filepath = os.path.join(UPLOAD_FOLDER, f.filename)
-        f.save(filepath)
-
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".dcm")
         try:
-            ds = dcmread(filepath, force=True)
-        except Exception as e:
-            errors.append(f"{f.filename}: Cannot read — {e}")
-            continue
+            f.save(tmp.name)
+            tmp.close()
+            tmp_paths.append(tmp.name)
 
-        try:
-            frames, frame_err = extract_all_frames(ds)
-            if frame_err and not frames:
-                errors.append(f"{f.filename}: {frame_err}")
+            try:
+                ds = dcmread(tmp.name)
+            except InvalidDicomError:
+                errors.append(f"{f.filename}: Not a valid DICOM file")
+                continue
+            except Exception as e:
+                errors.append(f"{f.filename}: Cannot read — {e}")
                 continue
 
-            for idx, img_b64 in enumerate(frames):
-                all_frames.append({
-                    "filename": f.filename,
-                    "frameIndex": idx,
-                    "image": img_b64,
-                })
-
-            if first_summary is None:
-                first_summary = build_summary(ds)
-                first_tag_groups, first_total_tags = parse_dataset(ds)
-
+            file_ds_pairs.append((f.filename, tmp.name, ds))
         except Exception as e:
             errors.append(f"{f.filename}: {e}")
+
+    # Sort by InstanceNumber then SliceLocation
+    def sort_key(triple):
+        _, _, ds = triple
+        try:
+            inst = int(getattr(ds, "InstanceNumber", None) or 0)
+        except Exception:
+            inst = 0
+        try:
+            loc = float(getattr(ds, "SliceLocation", None) or 0.0)
+        except Exception:
+            loc = 0.0
+        return (inst, loc)
+
+    file_ds_pairs.sort(key=sort_key)
+
+    all_frames = []
+    first_summary = None
+    first_tag_groups = None
+    first_total_tags = 0
+
+    try:
+        for orig_name, tmp_path, ds in file_ds_pairs:
+            try:
+                frames, frame_err = extract_all_frames(ds)
+                if frame_err and not frames:
+                    errors.append(f"{orig_name}: {frame_err}")
+                    continue
+
+                for idx, img_b64 in enumerate(frames):
+                    all_frames.append({
+                        "filename": orig_name,
+                        "frameIndex": idx,
+                        "image": img_b64,
+                    })
+
+                if first_summary is None:
+                    first_summary = build_summary(ds)
+                    first_tag_groups, first_total_tags = parse_dataset(ds)
+
+            except Exception as e:
+                errors.append(f"{orig_name}: {e}")
+    finally:
+        # Always clean up temp files
+        for p in tmp_paths:
+            try:
+                os.unlink(p)
+            except Exception:
+                pass
 
     if not all_frames:
         return jsonify({"error": "No frames could be extracted. " + "; ".join(errors)}), 400
@@ -533,4 +627,4 @@ def api_parse_series():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000, host="0.0.0.0")
+    app.run(debug=os.environ.get("FLASK_DEBUG", "false").lower() == "true", port=5000, host="0.0.0.0")
