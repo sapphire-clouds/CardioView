@@ -2,8 +2,8 @@
 
 A browser-based DICOM viewer built with Flask and vanilla JS. Drag in a `.dcm` file and it renders the image, parses every tag, and lets you scrub through multi-frame series — no PACS, no plugins, nothing leaving your machine.
 
-![Dark mode screenshot placeholder](https://placehold.co/900x480/080B10/0FBFA0?text=CardioView+DICOM+Viewer)
-
+![Dark mode](image.png)
+![Light mode](image-1.pnng)
 ---
 
 ## Features
